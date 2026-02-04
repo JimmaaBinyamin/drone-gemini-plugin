@@ -1,7 +1,7 @@
 # Build stage
 FROM golang:1.22-alpine AS builder
 
-RUN apk add --no-cache git ca-certificates
+RUN apk add --no-cache git ca-certificates upx
 
 WORKDIR /build
 
@@ -12,24 +12,23 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build the plugin binary with optimizations
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -trimpath -o drone-gemini-plugin .
+# Build with maximum optimizations
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-s -w -extldflags '-static'" \
+    -trimpath \
+    -o drone-gemini-plugin .
 
-# Runtime stage
-FROM alpine:3.19
+# Compress binary with UPX (reduces size by ~60%)
+RUN upx --best --lzma drone-gemini-plugin || true
 
-# Add non-root user for security
-RUN addgroup -S appuser && adduser -S appuser -G appuser
+# Runtime stage - use scratch for minimal image
+FROM scratch
 
-RUN apk add --no-cache ca-certificates tzdata git
+# Copy CA certificates for HTTPS
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
-WORKDIR /app
-
-# Copy the compiled plugin binary with proper ownership
-COPY --from=builder --chown=appuser:appuser /build/drone-gemini-plugin /bin/drone-gemini-plugin
-
-# Switch to non-root user
-USER appuser
+# Copy the compressed binary
+COPY --from=builder /build/drone-gemini-plugin /bin/drone-gemini-plugin
 
 # Set the entrypoint
 ENTRYPOINT ["/bin/drone-gemini-plugin"]
